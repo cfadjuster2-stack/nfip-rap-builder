@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { groupByCategory, sortCategories } from '../utils/categoryMapping';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 export default function ContractorDetails({ lineItems, pricing, headerInfo, onBack }) {
   const [details, setDetails] = useState({
@@ -37,27 +39,136 @@ export default function ContractorDetails({ lineItems, pricing, headerInfo, onBa
     setExporting(true);
 
     try {
-      // Prepare data for PDF generation
-      const rapData = {
-        contractor: details,
-        header: headerInfo,
-        pricing: pricing,
-        lineItems: lineItems,
-        timestamp: new Date().toISOString()
-      };
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      let yPosition = 20;
 
-      // TODO: Implement PDF generation
-      // For now, we'll just download as JSON
-      const dataStr = JSON.stringify(rapData, null, 2);
-      const dataBlob = new Blob([dataStr], { type: 'application/json' });
-      const url = URL.createObjectURL(dataBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `RAP_${headerInfo?.claim_number || 'export'}_${Date.now()}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      // Header - NFIP RAP
+      doc.setFontSize(20);
+      doc.setTextColor(59, 91, 165); // #3B5BA5
+      doc.text('NFIP Reasonable and Proper (RAP)', pageWidth / 2, yPosition, { align: 'center' });
+      yPosition += 10;
 
-      alert('RAP exported successfully! (PDF generation coming soon)');
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text('Pricing Adjustment Documentation', pageWidth / 2, yPosition, { align: 'center' });
+      yPosition += 15;
+
+      // Claim Information
+      doc.setFontSize(12);
+      doc.setTextColor(0, 0, 0);
+      doc.text('Claim Information', 14, yPosition);
+      yPosition += 7;
+
+      doc.setFontSize(10);
+      doc.setTextColor(60, 60, 60);
+      doc.text(`Claim Number: ${headerInfo?.claim_number || 'N/A'}`, 14, yPosition);
+      yPosition += 5;
+      doc.text(`Insured: ${headerInfo?.insured_name || 'N/A'}`, 14, yPosition);
+      yPosition += 10;
+
+      // Contractor Information
+      doc.setFontSize(12);
+      doc.setTextColor(0, 0, 0);
+      doc.text('Contractor Information', 14, yPosition);
+      yPosition += 7;
+
+      doc.setFontSize(10);
+      doc.setTextColor(60, 60, 60);
+      doc.text(`Name: ${details.name}`, 14, yPosition);
+      yPosition += 5;
+      doc.text(`License: ${details.gcLicense}`, 14, yPosition);
+      yPosition += 5;
+      doc.text(`Phone: ${details.phone}`, 14, yPosition);
+      yPosition += 5;
+      doc.text(`Email: ${details.email}`, 14, yPosition);
+      yPosition += 5;
+      doc.text(`Address: ${details.address}`, 14, yPosition);
+      yPosition += 12;
+
+      // Pricing Table
+      doc.setFontSize(12);
+      doc.setTextColor(0, 0, 0);
+      doc.text('Pricing Summary', 14, yPosition);
+      yPosition += 5;
+
+      // Prepare table data
+      const tableData = summary.map(item => [
+        item.category,
+        formatCurrency(item.iaEstimate),
+        formatCurrency(item.contractorPrice),
+        `${item.adjustment > 0 ? '+' : ''}${formatCurrency(item.adjustment)}`
+      ]);
+
+      // Add totals row
+      tableData.push([
+        'TOTAL',
+        formatCurrency(totalIAEstimate),
+        formatCurrency(totalContractorPrice),
+        `${totalAdjustment > 0 ? '+' : ''}${formatCurrency(totalAdjustment)}`
+      ]);
+
+      doc.autoTable({
+        startY: yPosition,
+        head: [['Trade Category', 'IA Estimate', 'Contractor Price', 'Adjustment']],
+        body: tableData,
+        theme: 'striped',
+        headStyles: {
+          fillColor: [59, 91, 165],
+          textColor: 255,
+          fontStyle: 'bold',
+          fontSize: 10
+        },
+        bodyStyles: {
+          fontSize: 9
+        },
+        columnStyles: {
+          0: { cellWidth: 60 },
+          1: { halign: 'right', cellWidth: 40 },
+          2: { halign: 'right', cellWidth: 40 },
+          3: { halign: 'right', cellWidth: 40 }
+        },
+        didParseCell: function(data) {
+          // Style the totals row
+          if (data.row.index === tableData.length - 1) {
+            data.cell.styles.fillColor = [59, 91, 165];
+            data.cell.styles.textColor = 255;
+            data.cell.styles.fontStyle = 'bold';
+          }
+          // Color adjustments
+          if (data.column.index === 3 && data.row.index < tableData.length - 1) {
+            const value = data.cell.raw;
+            if (value.startsWith('+')) {
+              data.cell.styles.textColor = [220, 38, 38]; // Red for overages
+            } else if (value.startsWith('-')) {
+              data.cell.styles.textColor = [22, 163, 74]; // Green for savings
+            }
+          }
+        }
+      });
+
+      // Footer
+      const finalY = doc.lastAutoTable.finalY + 15;
+      doc.setFontSize(8);
+      doc.setTextColor(100, 100, 100);
+      doc.text(
+        `Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
+        pageWidth / 2,
+        finalY,
+        { align: 'center' }
+      );
+      doc.text(
+        'NFIP Billing Academy | Compliance · Clarity · Consistency',
+        pageWidth / 2,
+        finalY + 5,
+        { align: 'center' }
+      );
+
+      // Save PDF
+      const fileName = `RAP_${headerInfo?.claim_number || 'export'}_${Date.now()}.pdf`;
+      doc.save(fileName);
+
+      alert('RAP PDF exported successfully!');
     } catch (error) {
       console.error('Export error:', error);
       alert('Failed to export RAP. Please try again.');
