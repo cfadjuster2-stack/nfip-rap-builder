@@ -5,9 +5,14 @@ export default function CategoryReview({ lineItems, onComplete }) {
   const [items, setItems] = useState(lineItems);
   const [expandedCategories, setExpandedCategories] = useState(new Set());
 
-  const handleCategoryChange = (itemIndex, newCategory) => {
-    const updatedItems = [...items];
-    updatedItems[itemIndex].category = newCategory;
+  // When category is changed, update ALL items with the same description
+  const handleCategoryChange = (description, newCategory) => {
+    const updatedItems = items.map(item => {
+      if (item.description.trim().toLowerCase() === description.trim().toLowerCase()) {
+        return { ...item, category: newCategory };
+      }
+      return item;
+    });
     setItems(updatedItems);
   };
 
@@ -21,12 +26,31 @@ export default function CategoryReview({ lineItems, onComplete }) {
     setExpandedCategories(newExpanded);
   };
 
-  const groupedItems = items.reduce((acc, item, index) => {
+  // Group items by category, then get unique descriptions within each category
+  const groupedItems = items.reduce((acc, item) => {
     const category = item.category || 'Other';
     if (!acc[category]) {
       acc[category] = [];
     }
-    acc[category].push({ ...item, originalIndex: index });
+
+    // Check if we already have this description in this category
+    const existingItem = acc[category].find(
+      i => i.description.trim().toLowerCase() === item.description.trim().toLowerCase()
+    );
+
+    if (existingItem) {
+      // Increment count
+      existingItem.count += 1;
+      existingItem.totalRcv += (item.rcv || 0);
+    } else {
+      // Add new unique item
+      acc[category].push({
+        ...item,
+        count: 1,
+        totalRcv: item.rcv || 0
+      });
+    }
+
     return acc;
   }, {});
 
@@ -56,7 +80,7 @@ export default function CategoryReview({ lineItems, onComplete }) {
                   {category}
                 </span>
                 <span className="text-xs text-gray-500 bg-white px-2 py-1 rounded-full">
-                  {categoryItems.length} items
+                  {categoryItems.length} unique items
                 </span>
               </div>
               <svg
@@ -74,13 +98,20 @@ export default function CategoryReview({ lineItems, onComplete }) {
             {/* Category Items - Expanded */}
             {expandedCategories.has(category) && (
               <div className="divide-y divide-gray-200">
-                {categoryItems.map((item) => (
-                  <div key={item.originalIndex} className="p-4 hover:bg-gray-50">
+                {categoryItems.map((item, idx) => (
+                  <div key={idx} className="p-4 hover:bg-gray-50">
                     <div className="flex items-start gap-4">
                       <div className="flex-1">
-                        <p className="text-sm text-gray-900 font-medium">{item.description}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm text-gray-900 font-medium">{item.description}</p>
+                          {item.count > 1 && (
+                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-semibold">
+                              ×{item.count}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-gray-500 mt-1">
-                          {item.quantity} {item.unit} × ${item.unit_price?.toFixed(2) || '0.00'} = ${item.rcv?.toFixed(2) || '0.00'}
+                          Total: ${item.totalRcv?.toFixed(2) || '0.00'}
                         </p>
                       </div>
                       <div className="w-64">
@@ -89,7 +120,7 @@ export default function CategoryReview({ lineItems, onComplete }) {
                         </label>
                         <select
                           value={item.category}
-                          onChange={(e) => handleCategoryChange(item.originalIndex, e.target.value)}
+                          onChange={(e) => handleCategoryChange(item.description, e.target.value)}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#3B5BA5] focus:border-transparent"
                         >
                           {TRADE_CATEGORIES.map((cat) => (
