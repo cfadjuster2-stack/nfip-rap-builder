@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { groupByCategory, sortCategories } from '../utils/categoryMapping';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
 export default function ContractorDetails({ lineItems, pricing, headerInfo, onBack }) {
@@ -39,19 +39,59 @@ export default function ContractorDetails({ lineItems, pricing, headerInfo, onBa
     setExporting(true);
 
     try {
+      // Step 1: Calculate category totals for price distribution
+      const categoryTotals = {};
+      lineItems.forEach(item => {
+        const category = item.category || 'GENERAL';
+        if (!categoryTotals[category]) {
+          categoryTotals[category] = 0;
+        }
+        categoryTotals[category] += (item.rcv || 0);
+      });
+
+      // Step 2: Distribute contractor prices to individual line items
+      const itemsWithDistributedPrices = lineItems.map(item => {
+        const category = item.category || 'GENERAL';
+        const contractorCategoryPrice = parseFloat(pricing[category]?.contractorPrice) || 0;
+        const categoryTotalRCV = categoryTotals[category] || 1; // Avoid division by zero
+
+        // Calculate distributed price for this item proportionally
+        let distributedPrice = 0;
+        if (contractorCategoryPrice > 0 && item.rcv > 0) {
+          distributedPrice = (item.rcv / categoryTotalRCV) * contractorCategoryPrice;
+        }
+
+        return {
+          ...item,
+          distributedPrice,
+          distributedUnitPrice: item.quantity > 0 ? distributedPrice / item.quantity : 0
+        };
+      });
+
+      // Step 3: Group by room
+      const itemsByRoom = {};
+      itemsWithDistributedPrices.forEach(item => {
+        const room = item.room || 'General';
+        if (!itemsByRoom[room]) {
+          itemsByRoom[room] = [];
+        }
+        itemsByRoom[room].push(item);
+      });
+
+      // Step 4: Create PDF with room-by-room, line-by-line format
       const doc = new jsPDF();
       const pageWidth = doc.internal.pageSize.getWidth();
       let yPosition = 20;
 
       // Header - NFIP RAP
       doc.setFontSize(20);
-      doc.setTextColor(59, 91, 165); // #3B5BA5
+      doc.setTextColor(59, 91, 165);
       doc.text('NFIP Reasonable and Proper (RAP)', pageWidth / 2, yPosition, { align: 'center' });
       yPosition += 10;
 
       doc.setFontSize(10);
       doc.setTextColor(100, 100, 100);
-      doc.text('Pricing Adjustment Documentation', pageWidth / 2, yPosition, { align: 'center' });
+      doc.text('Contractor Pricing Documentation', pageWidth / 2, yPosition, { align: 'center' });
       yPosition += 15;
 
       // Claim Information
@@ -86,83 +126,90 @@ export default function ContractorDetails({ lineItems, pricing, headerInfo, onBa
       doc.text(`Address: ${details.address}`, 14, yPosition);
       yPosition += 12;
 
-      // Pricing Table
+      // Line items by room
       doc.setFontSize(12);
       doc.setTextColor(0, 0, 0);
-      doc.text('Pricing Summary', 14, yPosition);
+      doc.text('Detailed Line Items', 14, yPosition);
       yPosition += 5;
 
-      // Prepare table data
-      const tableData = summary.map(item => [
-        item.category,
-        formatCurrency(item.iaEstimate),
-        formatCurrency(item.contractorPrice),
-        `${item.adjustment > 0 ? '+' : ''}${formatCurrency(item.adjustment)}`
-      ]);
-
-      // Add totals row
-      tableData.push([
-        'TOTAL',
-        formatCurrency(totalIAEstimate),
-        formatCurrency(totalContractorPrice),
-        `${totalAdjustment > 0 ? '+' : ''}${formatCurrency(totalAdjustment)}`
-      ]);
-
-      doc.autoTable({
-        startY: yPosition,
-        head: [['Trade Category', 'IA Estimate', 'Contractor Price', 'Adjustment']],
-        body: tableData,
-        theme: 'striped',
-        headStyles: {
-          fillColor: [59, 91, 165],
-          textColor: 255,
-          fontStyle: 'bold',
-          fontSize: 10
-        },
-        bodyStyles: {
-          fontSize: 9
-        },
-        columnStyles: {
-          0: { cellWidth: 60 },
-          1: { halign: 'right', cellWidth: 40 },
-          2: { halign: 'right', cellWidth: 40 },
-          3: { halign: 'right', cellWidth: 40 }
-        },
-        didParseCell: function(data) {
-          // Style the totals row
-          if (data.row.index === tableData.length - 1) {
-            data.cell.styles.fillColor = [59, 91, 165];
-            data.cell.styles.textColor = 255;
-            data.cell.styles.fontStyle = 'bold';
-          }
-          // Color adjustments
-          if (data.column.index === 3 && data.row.index < tableData.length - 1) {
-            const value = data.cell.raw;
-            if (value.startsWith('+')) {
-              data.cell.styles.textColor = [220, 38, 38]; // Red for overages
-            } else if (value.startsWith('-')) {
-              data.cell.styles.textColor = [22, 163, 74]; // Green for savings
-            }
-          }
+      Object.entries(itemsByRoom).forEach(([room, items], roomIndex) => {
+        // Check if we need a new page
+        if (yPosition > 250) {
+          doc.addPage();
+          yPosition = 20;
         }
+
+        // Room header
+        doc.setFontSize(11);
+        doc.setTextColor(59, 91, 165);
+        doc.setFont(undefined, 'bold');
+        doc.text(room, 14, yPosition);
+        doc.setFont(undefined, 'normal');
+        yPosition += 3;
+
+        // Create table for this room's items
+        const tableData = items.map(item => [
+          item.description || '',
+          `${item.quantity || 0}`,
+          item.unit || '',
+          formatCurrency(item.distributedUnitPrice || 0),
+          formatCurrency(item.rcv || 0),
+          formatCurrency(item.distributedPrice || 0)
+        ]);
+
+        doc.autoTable({
+          startY: yPosition,
+          head: [['Description', 'Qty', 'Unit', 'Unit Price', 'Original RCV', 'Contractor Price']],
+          body: tableData,
+          theme: 'striped',
+          headStyles: {
+            fillColor: [59, 91, 165],
+            textColor: 255,
+            fontStyle: 'bold',
+            fontSize: 8
+          },
+          bodyStyles: {
+            fontSize: 7
+          },
+          columnStyles: {
+            0: { cellWidth: 70 },
+            1: { cellWidth: 15, halign: 'right' },
+            2: { cellWidth: 20, halign: 'center' },
+            3: { halign: 'right', cellWidth: 25 },
+            4: { halign: 'right', cellWidth: 25 },
+            5: { halign: 'right', cellWidth: 25 }
+          },
+          margin: { left: 14, right: 14 }
+        });
+
+        yPosition = doc.lastAutoTable.finalY + 6;
       });
 
-      // Footer
-      const finalY = doc.lastAutoTable.finalY + 15;
-      doc.setFontSize(8);
-      doc.setTextColor(100, 100, 100);
-      doc.text(
-        `Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
-        pageWidth / 2,
-        finalY,
-        { align: 'center' }
-      );
-      doc.text(
-        'NFIP Billing Academy | Compliance · Clarity · Consistency',
-        pageWidth / 2,
-        finalY + 5,
-        { align: 'center' }
-      );
+      // Footer on last page
+      const pageCount = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        doc.text(
+          `Page ${i} of ${pageCount}`,
+          pageWidth / 2,
+          doc.internal.pageSize.getHeight() - 15,
+          { align: 'center' }
+        );
+        doc.text(
+          `Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
+          pageWidth / 2,
+          doc.internal.pageSize.getHeight() - 10,
+          { align: 'center' }
+        );
+        doc.text(
+          'NFIP Billing Academy | Compliance · Clarity · Consistency',
+          pageWidth / 2,
+          doc.internal.pageSize.getHeight() - 5,
+          { align: 'center' }
+        );
+      }
 
       // Save PDF
       const fileName = `RAP_${headerInfo?.claim_number || 'export'}_${Date.now()}.pdf`;
